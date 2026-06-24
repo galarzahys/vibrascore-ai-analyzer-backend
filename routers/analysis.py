@@ -119,3 +119,154 @@ async def get_vibra_id(analysis_id: str, db: Session = Depends(get_db)):
         "vibra_id": analysis.vibra_id,
         "vibra_ver": analysis.vibra_ver or 1
     }
+
+
+# ── LISTA DE ANÁLISES (filtra por tenant) ──────────────────────
+
+@router.get("/list")
+async def listar_analyses(
+    caller_email: str = "",
+    db: Session = Depends(get_db),
+):
+    """
+    Retorna lista resumida de análises para o menu.
+    - superadmin: ve todas
+    - otros: solo las de su client_id
+    """
+    from models.database import Report, Usuario
+
+    # Determinar filtro por tenant
+    client_id_filter = None
+    if caller_email:
+        caller = db.query(Usuario).filter(Usuario.email == caller_email).first()
+        if caller and caller.perfil != "superadmin":
+            client_id_filter = caller.client_id
+
+    q = db.query(Analysis)
+    if client_id_filter is not None:
+        q = q.filter(Analysis.client_id == client_id_filter)
+
+    analyses = q.order_by(Analysis.created_at.desc()).all()
+
+    result = []
+    for a in analyses:
+        report = db.query(Report).filter(Report.analysis_id == a.id).first()
+        result.append({
+            "id": a.id,
+            "empresa": a.company_name or "—",
+            "cnpj": a.cnpj or "—",
+            "analista": a.analyst_name or "—",
+            "vibraId": a.vibra_id or "—",
+            "status": a.status,
+            "score": report.score_vibra if report else 0,
+            "limite": report.limite_recomendado if report else 0,
+            "data": a.created_at.strftime("%d/%m/%Y") if a.created_at else "—",
+            "company_name": a.company_name,
+        })
+    return result
+
+
+# ── PARECER DO ANALISTA ────────────────────────────────────────
+
+import json as _json
+from fastapi import Body as _Body
+
+
+def _load_json_col(val):
+    if not val:
+        return {}
+    try:
+        return _json.loads(val)
+    except Exception:
+        return {}
+
+
+def _get_report_or_404(analysis_id, db):
+    from models.database import Report
+    report = db.query(Report).filter(Report.analysis_id == analysis_id).first()
+    if not report:
+        raise HTTPException(404, "Relatório ainda não gerado para esta análise")
+    return report
+
+
+@router.get("/{analysis_id}/parecer")
+async def get_parecer_analista(analysis_id: str, db: Session = Depends(get_db)):
+    report = _get_report_or_404(analysis_id, db)
+    return _load_json_col(report.parecer_analista_json)
+
+
+@router.post("/{analysis_id}/parecer")
+async def salvar_parecer_analista(
+    analysis_id: str,
+    body: dict = _Body(...),
+    db: Session = Depends(get_db),
+):
+    report = _get_report_or_404(analysis_id, db)
+    atual = _load_json_col(report.parecer_analista_json)
+    atual.update(body)
+    report.parecer_analista_json = _json.dumps(atual, ensure_ascii=False)
+    db.commit()
+    return atual
+
+
+@router.get("/{analysis_id}/comite")
+async def get_comite(analysis_id: str, db: Session = Depends(get_db)):
+    report = _get_report_or_404(analysis_id, db)
+    return _load_json_col(report.comite_json)
+
+
+@router.post("/{analysis_id}/comite")
+async def salvar_comite(
+    analysis_id: str,
+    body: dict = _Body(...),
+    db: Session = Depends(get_db),
+):
+    report = _get_report_or_404(analysis_id, db)
+    atual = _load_json_col(report.comite_json)
+    atual.update(body)
+    report.comite_json = _json.dumps(atual, ensure_ascii=False)
+    db.commit()
+    return atual
+
+
+@router.get("/{analysis_id}/obs")
+async def get_obs(analysis_id: str, db: Session = Depends(get_db)):
+    report = _get_report_or_404(analysis_id, db)
+    return _load_json_col(report.obs_json)
+
+
+@router.patch("/{analysis_id}/obs")
+async def salvar_obs(
+    analysis_id: str,
+    db: Session = Depends(get_db),
+    aba_id: str = _Body(..., embed=True),
+    texto: str = _Body(..., embed=True),
+):
+    report = _get_report_or_404(analysis_id, db)
+    obs = _load_json_col(report.obs_json)
+    obs[aba_id] = texto
+    report.obs_json = _json.dumps(obs, ensure_ascii=False)
+    db.commit()
+    return obs
+
+
+@router.get("/{analysis_id}/feedback")
+async def get_feedback(analysis_id: str, db: Session = Depends(get_db)):
+    report = _get_report_or_404(analysis_id, db)
+    return _load_json_col(report.feedback_json)
+
+
+@router.post("/{analysis_id}/feedback")
+async def salvar_feedback(
+    analysis_id: str,
+    body: dict = _Body(...),
+    db: Session = Depends(get_db),
+):
+    from datetime import datetime
+    report = _get_report_or_404(analysis_id, db)
+    atual = _load_json_col(report.feedback_json)
+    atual.update(body)
+    atual["ts"] = int(datetime.utcnow().timestamp() * 1000)
+    report.feedback_json = _json.dumps(atual, ensure_ascii=False)
+    db.commit()
+    return atual

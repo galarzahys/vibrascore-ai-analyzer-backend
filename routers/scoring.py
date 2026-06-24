@@ -7,11 +7,11 @@ Endpoints:
 
 Etapa 5 — Calibração configurável.
 """
-from fastapi import APIRouter, HTTPException, Depends, Header
+from fastapi import APIRouter, HTTPException, Depends, Header, Body
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from typing import Optional
-from models.database import SessionLocal, ScoringConfig
+from models.database import SessionLocal, ScoringConfig, AdminConfig
 
 router = APIRouter(prefix="/api/scoring", tags=["scoring"])
 
@@ -130,3 +130,33 @@ def reset_config(db: Session = Depends(get_db), x_user_role: Optional[str] = Hea
     db.commit()
     db.refresh(cfg)
     return {"ok": True, **_cfg_to_dict(cfg)}
+
+
+    from models.database import AdminConfig 
+
+
+@router.get("/defasagem")
+def get_defasagem(db: Session = Depends(get_db)):
+    cfg = db.query(AdminConfig).filter(AdminConfig.id == 1).first()
+    if not cfg or not cfg.defasagem_json:
+        # defaults
+        return {
+            "bureau": 30, "scr": 90, "faturamento": 90,
+            "balanco": 365, "dre": 365, "endividamento": 90,
+            "irpf": 365, "contrato": 730, "certidoes": 90,
+        }
+    try:
+        return json.loads(cfg.defasagem_json)
+    except Exception:
+        return {}
+
+
+@router.post("/defasagem")
+def salvar_defasagem(body: dict = Body(...), db: Session = Depends(get_db)):
+    cfg = db.query(AdminConfig).filter(AdminConfig.id == 1).first()
+    if not cfg:
+        cfg = AdminConfig(id=1)
+        db.add(cfg)
+    cfg.defasagem_json = json.dumps(body, ensure_ascii=False)
+    db.commit()
+    return body

@@ -145,6 +145,11 @@ class Report(Base):
 
     analysis            = relationship("Analysis", back_populates="report")
 
+    parecer_analista_json = Column(Text, nullable=True)  
+    comite_json           = Column(Text, nullable=True)  
+    obs_json              = Column(Text, nullable=True)  
+    feedback_json         = Column(Text, nullable=True)  
+
 
 # ── RODADA P — GRUPO ECONÔMICO ────────────────────────────────
 
@@ -259,3 +264,58 @@ class ScoringConfig(Base):
     updated_at  = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     updated_by  = Column(String, nullable=True)
 # ===== ETAPA 5 FIM =====
+
+
+class Cliente(Base):
+    """
+    Tenant / Empresa cliente da plataforma.
+    Criado pelo superadmin. Cada Cliente tem seus próprios usuários e análises.
+    """
+    __tablename__ = "clientes"
+
+    id         = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    nome       = Column(String, nullable=False)
+    cnpj       = Column(String, nullable=True)
+    vibra_seq  = Column(String, nullable=True)   # C-001, C-002, ...
+    ativo      = Column(Boolean, default=True)
+
+
+class Usuario(Base):
+    """
+    Usuário do sistema. Modelo unificado com suporte multi-tenant.
+
+    perfil:
+      superadmin — acesso total, client_id=NULL (admin@vibrascore.com.br)
+      admin      — admin do tenant, gerencia usuários da sua empresa
+      gestor     — aprova análises do tenant
+      analista   — cria e vê análises do tenant
+      comite     — só visão comitê do tenant
+    """
+    __tablename__ = "usuarios"
+
+    id         = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    created_at = Column(DateTime, default=datetime.utcnow)
+    email      = Column(String, nullable=False, unique=True)
+    senha      = Column(String, nullable=False)
+    nome       = Column(String, nullable=False)
+    cargo      = Column(String, nullable=True)
+    perfil     = Column(String, default="analista")  # superadmin | admin | gestor | analista | comite
+    client_id  = Column(String, nullable=True)        # NULL = superadmin, UUID = pertence a um tenant
+    ativo      = Column(Boolean, default=True)
+
+
+class AdminConfig(Base):
+    """
+    Configuração global singleton (id=1).
+    Reemplaza: vs_plataforma_nome, vs_score_min, vs_admin_senha, vs_defasagem.
+    """
+    __tablename__ = "admin_config"
+
+    id              = Column(Integer, primary_key=True, default=1)
+    plataforma_nome = Column(String, default="VibraScore")
+    score_min       = Column(Integer, default=0)
+    admin_senha     = Column(String, default="vibra2024")
+    defasagem_json  = Column(Text, nullable=True)
+    updated_at      = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
