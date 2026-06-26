@@ -452,7 +452,8 @@ INSTRUCOES CRITICAS — ANALISE MULTI-PERIODO:
 - Para cadastral: extraia site, funcionarios, representantes e alteracoes do bureau ou contrato social
 - Para historico_interno: se houver dados preenchidos pelo analista, gere analise_ia avaliando o comportamento historico
 - Para qsa: inclua dados de PEP, sancoes e perfil do bureau se disponivel
-- Para curva_abc: se houver documento de Curva ABC, extraia cada cliente com participacao percentual"""
+- Para curva_abc: se houver documento de Curva ABC, extraia cada cliente com participacao percentual
+- Para endividamento_privado: - Para endividamento_privado: extraia EXCLUSIVAMENTE de documentos anexados separadamente que contenham dados de endividamento privado (ex: planilhas de dividas, extratos bancarios, relatorios de endividamento, documentos SCR/BACEN separados do bureau, declaracoes de dividas). NAO extraia do documento de bureau (Vibra Full ou qualquer outro bureau de credito) — os dados de PEFIN/REFIN/Protestos do bureau ja estao capturados no campo "tributario". Se nenhum documento separado de endividamento foi anexado, retorne array vazio []. Para cada credor identificado nos documentos separados, preencha: "credor" (nome da instituicao ou pessoa), "modalidade" (tipo de divida, ex: "CCB - Banco X", "Contrato de Mutuo", "Debito Bancario", "CRI", "CRA", "Debenture"), "valor" (valor em reais)."""
 
         client = _get_client()
         raw_parts = []

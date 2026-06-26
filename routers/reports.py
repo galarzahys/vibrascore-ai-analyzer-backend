@@ -15,7 +15,8 @@ async def get_report(analysis_id: str, db: Session = Depends(get_db)):
     analysis = db.query(Analysis).filter(Analysis.id == analysis_id).first()
     if not analysis:
         raise HTTPException(404, "Análise não encontrada")
-    if analysis.status != "done":
+    if analysis.status not in ("done", "aguardando_comite", "em_deliberacao", 
+                                "aprovado", "aprovado_com_ressalvas", "recusado"):
         raise HTTPException(404, "Relatório ainda não disponível")
 
     report = db.query(Report).filter(Report.analysis_id == analysis_id).first()

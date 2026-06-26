@@ -319,3 +319,18 @@ class AdminConfig(Base):
     admin_senha     = Column(String, default="vibra2024")
     defasagem_json  = Column(Text, nullable=True)
     updated_at      = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+class DocChecklist(Base):
+    """
+    Checklist de documentos configurável pelo superadmin.
+    Documentos hard (bureau, scr, faturamento) não podem ser editados/removidos.
+    """
+    __tablename__ = "doc_checklist"
+
+    id        = Column(Integer, primary_key=True, autoincrement=True)
+    field_key = Column(String, nullable=False, unique=True)
+    label     = Column(String, nullable=False)
+    required  = Column(String, default="opcional")  # hard | obrigatorio | opcional
+    formats   = Column(String, default=".pdf")
+    ativo     = Column(Boolean, default=True)
+    ordem     = Column(Integer, default=99)

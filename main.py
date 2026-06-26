@@ -38,12 +38,12 @@ app.include_router(auth.router,      prefix="/api/auth",      tags=["auth"])
 app.include_router(admin.router,     prefix="/api/admin",     tags=["admin"])
 app.include_router(clients.router,   prefix="/api/clientes",  tags=["clientes"])
 
-app.mount("/static", StaticFiles(directory="../frontend"), name="static")
+app.mount("/static", StaticFiles(directory="../vibrascore-ai-analyzer-frontend"), name="static")
 
 
 @app.get("/")
 async def root():
-    return FileResponse("../frontend/index.html", media_type="text/html")
+    return FileResponse("../vibrascore-ai-analyzer-frontend/index.html", media_type="text/html")
 
 
 @app.get("/health")

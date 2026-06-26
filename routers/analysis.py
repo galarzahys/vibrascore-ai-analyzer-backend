@@ -191,8 +191,15 @@ def _get_report_or_404(analysis_id, db):
 
 @router.get("/{analysis_id}/parecer")
 async def get_parecer_analista(analysis_id: str, db: Session = Depends(get_db)):
+    """Retorna array de pareceres de todos los analistas."""
     report = _get_report_or_404(analysis_id, db)
-    return _load_json_col(report.parecer_analista_json)
+    data = _load_json_col(report.parecer_analista_json)
+    # garantir que siempre retorna array
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict) and data:
+        return [data]
+    return []
 
 
 @router.post("/{analysis_id}/parecer")
@@ -201,9 +208,41 @@ async def salvar_parecer_analista(
     body: dict = _Body(...),
     db: Session = Depends(get_db),
 ):
+    """
+    Guarda o atualiza el parecer del usuario actual.
+    body debe incluir: user_id, email, nome, cargo, parecer, limite, etc.
+    Si el usuario ya tiene parecer, sobrescribe el suyo. No toca los de otros.
+    """
+    from datetime import datetime
     report = _get_report_or_404(analysis_id, db)
+ 
     atual = _load_json_col(report.parecer_analista_json)
-    atual.update(body)
+    if isinstance(atual, dict):
+        atual = [atual] if atual else []
+    elif not isinstance(atual, list):
+        atual = []
+ 
+    user_id = body.get("user_id") or body.get("email") or "desconhecido"
+    # remover parecer anterior del mismo usuario
+    atual = [p for p in atual if p.get("user_id") != user_id and p.get("email") != user_id]
+ 
+    # agregar el nuevo
+    novo = {
+        "user_id": user_id,
+        "email": body.get("email") or user_id,
+        "nome": body.get("nome") or "",
+        "cargo": body.get("cargo") or "",
+        "parecer": body.get("parecer") or "",
+        "limite": body.get("limite") or "",
+        "limite_mem": body.get("limite_mem") or "",
+        "notas_finais": body.get("notas_finais") or "",
+        "pontos_fortes": body.get("pontos_fortes") or [],
+        "pontos_atencao": body.get("pontos_atencao") or [],
+        "condicionantes": body.get("condicionantes") or [],
+        "ts": int(datetime.utcnow().timestamp() * 1000),
+    }
+    atual.append(novo)
+ 
     report.parecer_analista_json = _json.dumps(atual, ensure_ascii=False)
     db.commit()
     return atual
@@ -270,3 +309,28 @@ async def salvar_feedback(
     report.feedback_json = _json.dumps(atual, ensure_ascii=False)
     db.commit()
     return atual
+
+@router.patch("/{analysis_id}/status")
+async def atualizar_status(
+    analysis_id: str,
+    db: Session = Depends(get_db),
+    status: str = Body(..., embed=True),
+):
+    VALIDOS = {"done", "aguardando_comite", "em_deliberacao", "aprovado",
+               "aprovado_com_ressalvas", "recusado"}
+    if status not in VALIDOS:
+        raise HTTPException(400, f"Status inválido")
+    a = db.query(Analysis).filter(Analysis.id == analysis_id).first()
+    if not a:
+        raise HTTPException(404, "Análise não encontrada")
+    a.status = status
+    db.commit()
+    return {"status": a.status}
+
+
+@router.get("/{analysis_id}/status")
+async def get_status_atual(analysis_id: str, db: Session = Depends(get_db)):
+    a = db.query(Analysis).filter(Analysis.id == analysis_id).first()
+    if not a:
+        raise HTTPException(404, "Análise não encontrada")
+    return {"status": a.status}

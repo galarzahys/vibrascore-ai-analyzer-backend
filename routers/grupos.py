@@ -127,11 +127,25 @@ async def obter_grupo(grupo_id: str, db: Session = Depends(get_db)):
 
 
 @router.get("/list-by-client/{client_id}")
-async def listar_grupos_por_client(client_id: str, db: Session = Depends(get_db)):
-    """Lista grupos de um tenant. Use 'all' para listar todos (uso interno/admin)."""
+async def listar_grupos_por_client(
+    client_id: str,
+    caller_email: str = "",
+    db: Session = Depends(get_db),
+):
+    """Lista grupos de um tenant. Use 'all' para listar todos (superadmin)."""
+    from models.database import Usuario
     q = db.query(Grupo)
+
     if client_id and client_id != "all":
+        # filtro explícito por client_id
         q = q.filter(Grupo.client_id == client_id)
+    elif caller_email:
+        # inferir filtro por el usuario caller
+        caller = db.query(Usuario).filter(Usuario.email == caller_email).first()
+        if caller and caller.perfil != "superadmin":
+            q = q.filter(Grupo.client_id == caller.client_id)
+        # superadmin sin client_id explícito: ve todos (no filtra)
+
     grupos = q.order_by(Grupo.created_at.desc()).all()
 
     out = []

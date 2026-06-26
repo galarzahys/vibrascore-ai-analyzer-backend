@@ -112,7 +112,7 @@ async def criar_usuario_tenant(
     if not c:
         raise HTTPException(404, "Cliente não encontrado")
 
-    perfis_validos = {"admin", "gestor", "analista", "comite"}
+    perfis_validos = {"admin", "gerente", "analista", "comite"}
     if perfil not in perfis_validos:
         raise HTTPException(400, f"Perfil inválido. Use: {', '.join(perfis_validos)}")
 
