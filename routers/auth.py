@@ -23,7 +23,7 @@ SUPERADMIN_DEFAULT = {
     "ativo": True,
 }
 
-PERFIS_VALIDOS = {"superadmin", "admin", "gestor", "analista", "comite"}
+PERFIS_VALIDOS = {"superadmin", "admin", "gerente", "analista", "comite"}
 
 
 def _seed(db: Session):
