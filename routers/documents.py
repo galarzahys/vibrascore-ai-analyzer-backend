@@ -20,8 +20,11 @@ HARD_REQUIRED = {"bureau", "scr", "faturamento"}
 
 
 @router.post("/create-analysis")
-async def create_analysis(db: Session = Depends(get_db)):
-    analysis = Analysis(id=str(uuid.uuid4()))
+async def create_analysis(
+    db: Session = Depends(get_db),
+    client_id: str = Form(default=None),
+):
+    analysis = Analysis(id=str(uuid.uuid4()), client_id=client_id)
     db.add(analysis)
     db.commit()
     db.refresh(analysis)
@@ -420,3 +423,83 @@ def _get_mime_from_ext(filename: str) -> str:
         "mp4": "video/mp4", "mov": "video/quicktime",
     }
     return mapping.get(ext, "application/octet-stream")
+
+
+MAX_ANEXO_SIZE_BYTES = 10_485_760  # 10 MB
+
+
+@router.post("/{analysis_id}/presigned-url-anexo")
+async def gerar_presigned_url_anexo(
+    analysis_id: str,
+    db: Session = Depends(get_db),
+    field_key: str = _Body(..., embed=True),
+    filename: str = _Body(..., embed=True),
+    content_type: str = _Body(default="application/octet-stream", embed=True),
+    file_size: int = _Body(..., embed=True),
+):
+    analysis = db.query(Analysis).filter(Analysis.id == analysis_id).first()
+    if not analysis:
+        raise HTTPException(404, "Analise nao encontrada")
+
+    if file_size > MAX_ANEXO_SIZE_BYTES:
+        raise HTTPException(
+            400,
+            f"Arquivo excede o limite de 10MB ({round(file_size/1024/1024, 2)}MB enviado)."
+        )
+
+    try:
+        from services.s3_service import get_presigned_upload_url
+        result = get_presigned_upload_url(analysis_id, field_key, filename, content_type)
+        return {
+            "upload_url": result["upload_url"],
+            "s3_key": result["s3_key"],
+            "max_size_bytes": MAX_ANEXO_SIZE_BYTES,
+        }
+    except Exception as e:
+        raise HTTPException(500, f"Erro ao gerar URL de upload: {str(e)}")
+
+
+@router.post("/{analysis_id}/confirm-upload-anexo")
+async def confirmar_upload_anexo(
+    analysis_id: str,
+    db: Session = Depends(get_db),
+    s3_key: str = _Body(..., embed=True),
+    field_key: str = _Body(..., embed=True),
+    field_label: str = _Body(..., embed=True),
+    original_name: str = _Body(..., embed=True),
+    file_size: int = _Body(default=0, embed=True),
+):
+    analysis = db.query(Analysis).filter(Analysis.id == analysis_id).first()
+    if not analysis:
+        raise HTTPException(404, "Analise nao encontrada")
+
+    mime_type = _get_mime_from_ext(original_name)
+
+    doc = Document(
+        analysis_id=analysis_id,
+        field_key=field_key,
+        field_label=field_label,
+        original_name=original_name,
+        s3_key=s3_key,
+        file_size=file_size,
+        mime_type=mime_type,
+        is_valid=True,
+        validation_msg="Arquivo de mídia/anexo recebido",
+        read_pct=100.0,
+        doc_type_found="Anexo",
+        is_required=False,
+    )
+    db.add(doc)
+    db.commit()
+    db.refresh(doc)
+
+    try:
+        from services.s3_service import get_presigned_url
+        file_url = get_presigned_url(s3_key)
+    except Exception:
+        file_url = None
+
+    return {
+        "document_id": doc.id,
+        "file_url": file_url,
+    }

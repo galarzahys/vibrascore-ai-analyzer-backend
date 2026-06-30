@@ -545,27 +545,17 @@ INSTRUCOES CRITICAS — ANALISE MULTI-PERIODO:
         # IA agora dá scores em escala 0-1000. Aplicamos pesos do ScoringConfig
         # para obter vibra_composto determinístico e auditável.
         try:
-            from models.database import ScoringConfig
-            cfg = db.query(ScoringConfig).filter(ScoringConfig.id == 1).first()
-            if not cfg:
-                # Não existe ainda — usa defaults
-                pesos = {
-                    "bureau": 25.0, "financeiro": 25.0, "comportamental": 15.0,
-                    "cadastral": 10.0, "tributario": 10.0, "garantias": 10.0,
-                    "cobertura": 5.0,
-                }
-                limites = {"a":900,"b":800,"c":700,"d":600,"e":500,
-                           "f":400,"g":300,"h":200,"i":100}
-            else:
-                pesos = {
-                    "bureau": cfg.peso_bureau, "financeiro": cfg.peso_financeiro,
-                    "comportamental": cfg.peso_comportamental, "cadastral": cfg.peso_cadastral,
-                    "tributario": cfg.peso_tributario, "garantias": cfg.peso_garantias,
-                    "cobertura": cfg.peso_cobertura,
-                }
-                limites = {"a":cfg.limite_a,"b":cfg.limite_b,"c":cfg.limite_c,
-                           "d":cfg.limite_d,"e":cfg.limite_e,"f":cfg.limite_f,
-                           "g":cfg.limite_g,"h":cfg.limite_h,"i":cfg.limite_i}
+            from routers.scoring import get_effective_config
+            cfg = get_effective_config(db, db_analysis.client_id)
+            pesos = {
+                "bureau": cfg.peso_bureau, "financeiro": cfg.peso_financeiro,
+                "comportamental": cfg.peso_comportamental, "cadastral": cfg.peso_cadastral,
+                "tributario": cfg.peso_tributario, "garantias": cfg.peso_garantias,
+                "cobertura": cfg.peso_cobertura,
+            }
+            limites = {"a":cfg.limite_a,"b":cfg.limite_b,"c":cfg.limite_c,
+                       "d":cfg.limite_d,"e":cfg.limite_e,"f":cfg.limite_f,
+                       "g":cfg.limite_g,"h":cfg.limite_h,"i":cfg.limite_i}
             # Sub-scores em 0-1000 (a IA agora deve obedecer essa escala — ver prompt)
             sub = {
                 "bureau":         float(scores.get("bureau") or 0),
@@ -578,7 +568,6 @@ INSTRUCOES CRITICAS — ANALISE MULTI-PERIODO:
             }
             composto = sum(sub[k] * (pesos[k] / 100.0) for k in sub)
             composto = max(0.0, min(1000.0, composto))
-            # Classifica
             if   composto >= limites["a"]: classe = "A"
             elif composto >= limites["b"]: classe = "B"
             elif composto >= limites["c"]: classe = "C"
@@ -589,18 +578,19 @@ INSTRUCOES CRITICAS — ANALISE MULTI-PERIODO:
             elif composto >= limites["h"]: classe = "H"
             elif composto >= limites["i"]: classe = "I"
             else:                           classe = "J"
-            # Sobrescreve no result (frontend lê de raw_json) e variáveis
             scores["vibra_composto"] = round(composto, 1)
             scores["_memoria_calculo"] = (
                 f"Vibra Composto = "
                 + " + ".join([f"{k}({sub[k]:.0f})×{pesos[k]:.1f}%" for k in sub])
                 + f" = {composto:.1f} → Classe {classe}"
+                + (f" [calibração tenant {db_analysis.client_id[:8]}]" if cfg.client_id else " [calibração global]")
             )
             scores["_classe"] = classe
             scores["_pesos_aplicados"] = pesos
             result["scores"] = scores
             print(f"[ANALYSIS {analysis_id[:8]}] Score recalculado: "
-                  f"composto={composto:.1f}, classe={classe}", flush=True)
+                  f"composto={composto:.1f}, classe={classe}, "
+                  f"config={'tenant' if cfg.client_id else 'global'}", flush=True)
         except Exception as ex_score:
             print(f"[ANALYSIS {analysis_id[:8]}] Aviso ao recalcular score: {ex_score}", flush=True)
             classe = None

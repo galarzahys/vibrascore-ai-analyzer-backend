@@ -280,7 +280,7 @@ Responda APENAS em JSON valido:
                 raw = raw[4:]
         result = json.loads(raw.strip())
 
-        is_valid = result.get("matches_field", False) and compat_pct >= 60
+        is_valid = result.get("matches_field", False)
         doc_type = result.get("doc_type_found", "Desconhecido")
         compat_pct = result.get("compatibility_pct", 0)
         quality = result.get("read_quality_pct", read_pct)
@@ -290,11 +290,13 @@ Responda APENAS em JSON valido:
         data_ref = result.get("data_referencia", "nao_identificada")
         observacoes = result.get("observacoes", "")
 
+        # is_valid agora exige compatibilidade mínima de 50%
+        is_valid = matches_field and compat_pct >= 50
         # Calcular defasagem
         defasagem = calcular_defasagem(data_ref, field_key)
 
         # Nivel de compatibilidade
-        if is_valid and compat_pct >= 60:
+        if is_valid and compat_pct >= 70:
             compat_level = "ok"
             extras = []
             if is_balancete:
@@ -303,7 +305,7 @@ Responda APENAS em JSON valido:
                 extras.append("DRE incluido no mesmo arquivo")
             extra_str = " · " + " · ".join(extras) if extras else ""
             compat_msg = f"Compativel com o campo ({compat_pct}%){extra_str}"
-        elif is_valid and compat_pct >= 40:
+        elif is_valid and compat_pct >= 50:
             compat_level = "warn"
             compat_msg = f"Compatibilidade parcial ({compat_pct}%) — {msg}"
         else:
@@ -326,6 +328,7 @@ Responda APENAS em JSON valido:
         }
 
     except Exception as e:
+        print(f"[VALIDATOR ERROR] field={field_key} erro={type(e).__name__}: {str(e)}", flush=True)
         # Fallback heuristico
         keywords = field_def.get("keywords", [])
         text_lower = extracted_text.lower()

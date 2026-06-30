@@ -1,21 +1,24 @@
 """
-Vibra Score — Router de calibração do score
+Vibra Score — Router de calibração do score (multi-tenant)
 Endpoints:
-  GET  /api/scoring/config         — retorna pesos + limites + defaults
-  PUT  /api/scoring/config         — atualiza (admin apenas; valida soma=100)
-  POST /api/scoring/config/reset   — restaura defaults (admin apenas)
+  GET  /api/scoring/config?client_id=X  — retorna config do tenant (ou global se não existir)
+  PUT  /api/scoring/config              — atualiza (admin do tenant ou superadmin)
+  POST /api/scoring/config/reset        — restaura defaults
 
-Etapa 5 — Calibração configurável.
+Regra de fallback:
+  - client_id=None ou vazio  -> usa/edita a config GLOBAL (client_id=NULL no banco)
+  - client_id=<uuid>         -> usa a config do tenant; se não existir, cria uma cópia
+                                 dos valores da config global na primeira gravação (PUT)
+                                 e para leitura (GET) retorna a global se a do tenant não existir.
 """
-from fastapi import APIRouter, HTTPException, Depends, Header, Body
+from fastapi import APIRouter, HTTPException, Depends, Header, Query
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from typing import Optional
-from models.database import SessionLocal, ScoringConfig, AdminConfig
+from models.database import SessionLocal, ScoringConfig
 
 router = APIRouter(prefix="/api/scoring", tags=["scoring"])
 
-# Defaults (mesmos do banco, mas em memória para o endpoint de reset)
 DEFAULTS = {
     "peso_bureau":         25.0,
     "peso_financeiro":     25.0,
@@ -41,21 +44,38 @@ def get_db():
     finally: db.close()
 
 
-def get_or_create_config(db: Session) -> ScoringConfig:
-    cfg = db.query(ScoringConfig).filter(ScoringConfig.id == 1).first()
+def get_global_config(db: Session) -> ScoringConfig:
+    """Retorna (ou cria) a config global — client_id IS NULL."""
+    cfg = db.query(ScoringConfig).filter(ScoringConfig.client_id.is_(None)).first()
     if not cfg:
-        cfg = ScoringConfig(id=1, **DEFAULTS)
+        cfg = ScoringConfig(client_id=None, **DEFAULTS)
         db.add(cfg)
         db.commit()
         db.refresh(cfg)
     return cfg
 
 
+def get_tenant_config(db: Session, client_id: str) -> Optional[ScoringConfig]:
+    """Retorna a config específica do tenant, ou None se não existir."""
+    return db.query(ScoringConfig).filter(ScoringConfig.client_id == client_id).first()
+
+
+def get_effective_config(db: Session, client_id: Optional[str]) -> ScoringConfig:
+    """
+    Config efetiva para LEITURA: tenant se existir, senão global (fallback).
+    Usado tanto pelo endpoint GET quanto pelo motor de análise.
+    """
+    if client_id:
+        cfg = get_tenant_config(db, client_id)
+        if cfg:
+            return cfg
+    return get_global_config(db)
+
+
 def _cfg_to_dict(cfg: ScoringConfig) -> dict:
     return {f: getattr(cfg, f) for f in PESO_FIELDS + LIMITE_FIELDS}
 
 
-# ===== Schemas =====
 class ScoringConfigIn(BaseModel):
     peso_bureau:         float = Field(..., ge=0, le=100)
     peso_financeiro:     float = Field(..., ge=0, le=100)
@@ -74,26 +94,13 @@ class ScoringConfigIn(BaseModel):
     limite_h: int = Field(..., ge=0, le=1000)
     limite_i: int = Field(..., ge=0, le=1000)
     updated_by: Optional[str] = None
-
-
-# ===== Endpoints =====
-@router.get("/config")
-def get_config(db: Session = Depends(get_db)):
-    cfg = get_or_create_config(db)
-    return {
-        **_cfg_to_dict(cfg),
-        "updated_at": cfg.updated_at.isoformat() if cfg.updated_at else None,
-        "updated_by": cfg.updated_by,
-        "defaults": DEFAULTS,
-    }
+    client_id: Optional[str] = None  # tenant alvo (None = global)
 
 
 def _validate_payload(p: ScoringConfigIn):
-    # Soma dos pesos deve ser 100% (tolerância 0.1)
     soma = sum(getattr(p, f) for f in PESO_FIELDS)
     if abs(soma - 100.0) > 0.1:
         raise HTTPException(400, f"Soma dos pesos deve ser 100%. Atual: {soma:.2f}%")
-    # Limites devem ser estritamente decrescentes (A > B > ... > I)
     limites = [getattr(p, f) for f in LIMITE_FIELDS]
     for i in range(len(limites) - 1):
         if limites[i] <= limites[i+1]:
@@ -101,14 +108,46 @@ def _validate_payload(p: ScoringConfigIn):
                                      f"Erro entre {LIMITE_FIELDS[i]}={limites[i]} e {LIMITE_FIELDS[i+1]}={limites[i+1]}.")
 
 
+# ===== Endpoints =====
+
+@router.get("/config")
+def get_config(
+    db: Session = Depends(get_db),
+    client_id: Optional[str] = Query(default=None),
+):
+    """
+    Retorna a config efetiva: do tenant se existir e for informado client_id,
+    senão a global. is_custom indica se o tenant tem config própria.
+    """
+    cfg = get_effective_config(db, client_id)
+    is_custom = bool(client_id) and cfg.client_id == client_id
+    return {
+        **_cfg_to_dict(cfg),
+        "updated_at": cfg.updated_at.isoformat() if cfg.updated_at else None,
+        "updated_by": cfg.updated_by,
+        "defaults": DEFAULTS,
+        "is_custom": is_custom,
+        "client_id": client_id,
+    }
+
+
 @router.put("/config")
 def update_config(payload: ScoringConfigIn, db: Session = Depends(get_db),
                   x_user_role: Optional[str] = Header(None)):
-    # Restrição de papel: só admin pode alterar
-    if x_user_role and x_user_role.lower() not in ("admin", "administrador"):
+    if x_user_role and x_user_role.lower() not in ("admin", "administrador", "superadmin"):
         raise HTTPException(403, "Apenas administradores podem alterar a calibração.")
     _validate_payload(payload)
-    cfg = get_or_create_config(db)
+
+    target_client_id = payload.client_id
+
+    if target_client_id:
+        cfg = get_tenant_config(db, target_client_id)
+        if not cfg:
+            cfg = ScoringConfig(client_id=target_client_id)
+            db.add(cfg)
+    else:
+        cfg = get_global_config(db)
+
     for f in PESO_FIELDS + LIMITE_FIELDS:
         setattr(cfg, f, getattr(payload, f))
     cfg.updated_by = payload.updated_by or x_user_role or "admin"
@@ -116,47 +155,30 @@ def update_config(payload: ScoringConfigIn, db: Session = Depends(get_db),
     db.refresh(cfg)
     return {"ok": True, **_cfg_to_dict(cfg),
             "updated_at": cfg.updated_at.isoformat() if cfg.updated_at else None,
-            "updated_by": cfg.updated_by}
+            "updated_by": cfg.updated_by,
+            "client_id": cfg.client_id}
 
 
 @router.post("/config/reset")
-def reset_config(db: Session = Depends(get_db), x_user_role: Optional[str] = Header(None)):
-    if x_user_role and x_user_role.lower() not in ("admin", "administrador"):
+def reset_config(
+    db: Session = Depends(get_db),
+    x_user_role: Optional[str] = Header(None),
+    client_id: Optional[str] = Query(default=None),
+):
+    if x_user_role and x_user_role.lower() not in ("admin", "administrador", "superadmin"):
         raise HTTPException(403, "Apenas administradores podem restaurar a calibração.")
-    cfg = get_or_create_config(db)
+
+    if client_id:
+        cfg = get_tenant_config(db, client_id)
+        if not cfg:
+            cfg = ScoringConfig(client_id=client_id)
+            db.add(cfg)
+    else:
+        cfg = get_global_config(db)
+
     for k, v in DEFAULTS.items():
         setattr(cfg, k, v)
     cfg.updated_by = x_user_role or "admin"
     db.commit()
     db.refresh(cfg)
-    return {"ok": True, **_cfg_to_dict(cfg)}
-
-
-    from models.database import AdminConfig 
-
-
-@router.get("/defasagem")
-def get_defasagem(db: Session = Depends(get_db)):
-    cfg = db.query(AdminConfig).filter(AdminConfig.id == 1).first()
-    if not cfg or not cfg.defasagem_json:
-        # defaults
-        return {
-            "bureau": 30, "scr": 90, "faturamento": 90,
-            "balanco": 365, "dre": 365, "endividamento": 90,
-            "irpf": 365, "contrato": 730, "certidoes": 90,
-        }
-    try:
-        return json.loads(cfg.defasagem_json)
-    except Exception:
-        return {}
-
-
-@router.post("/defasagem")
-def salvar_defasagem(body: dict = Body(...), db: Session = Depends(get_db)):
-    cfg = db.query(AdminConfig).filter(AdminConfig.id == 1).first()
-    if not cfg:
-        cfg = AdminConfig(id=1)
-        db.add(cfg)
-    cfg.defasagem_json = json.dumps(body, ensure_ascii=False)
-    db.commit()
-    return body
+    return {"ok": True, **_cfg_to_dict(cfg), "client_id": cfg.client_id}

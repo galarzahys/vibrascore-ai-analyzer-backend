@@ -230,14 +230,14 @@ class GrupoDocument(Base):
 # ===== ETAPA 5 INICIO — ScoringConfig (singleton de calibração) =====
 class ScoringConfig(Base):
     """
-    Configuração global de calibração do Score Vibra.
-    Tabela singleton: sempre id=1.
-    Define os pesos de cada componente no cálculo do vibra_composto,
-    e os limites de cada classe (A=melhor, J=pior) na escala 0-1000.
+    Configuração de calibração do Score Vibra.
+    Pode ser GLOBAL (client_id=NULL, usada pelo superadmin / fallback)
+    ou ESPECÍFICA de um tenant (client_id=UUID).
     """
     __tablename__ = "scoring_config"
 
-    id = Column(Integer, primary_key=True, default=1)
+    id        = Column(Integer, primary_key=True, autoincrement=True)
+    client_id = Column(String, nullable=True, unique=True)  # NULL = global
 
     # Pesos dos 7 componentes (em %, soma deve dar 100)
     peso_bureau          = Column(Float, default=25.0)
@@ -249,8 +249,6 @@ class ScoringConfig(Base):
     peso_cobertura       = Column(Float, default=5.0)
 
     # Limites inferiores de cada classe na escala 0-1000.
-    # Padrão: classes regulares de 100 pontos.
-    # Classe J = qualquer valor abaixo de limite_i.
     limite_a = Column(Integer, default=900)
     limite_b = Column(Integer, default=800)
     limite_c = Column(Integer, default=700)
@@ -263,6 +261,7 @@ class ScoringConfig(Base):
 
     updated_at  = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     updated_by  = Column(String, nullable=True)
+
 # ===== ETAPA 5 FIM =====
 
 
