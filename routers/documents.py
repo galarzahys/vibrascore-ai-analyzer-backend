@@ -22,7 +22,7 @@ HARD_REQUIRED = {"bureau", "scr", "faturamento"}
 @router.post("/create-analysis")
 async def create_analysis(
     db: Session = Depends(get_db),
-    client_id: str = Form(default=None),
+    client_id: str = None,
 ):
     analysis = Analysis(id=str(uuid.uuid4()), client_id=client_id)
     db.add(analysis)
