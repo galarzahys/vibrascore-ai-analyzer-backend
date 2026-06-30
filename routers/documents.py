@@ -254,6 +254,8 @@ async def delete_document(analysis_id: str, doc_id: str, db: Session = Depends(g
 
 @router.get("/{analysis_id}/check-ready")
 async def check_ready(analysis_id: str, db: Session = Depends(get_db)):
+    from models.database import DocChecklist
+
     docs = db.query(Document).filter(Document.analysis_id == analysis_id).all()
     docs_by_key = {}
     for d in docs:
@@ -264,12 +266,157 @@ async def check_ready(analysis_id: str, db: Session = Depends(get_db)):
     issues = []
     can_run = True
 
-    for key in HARD_REQUIRED:
+    # checklist dinâmico — campos hard e obrigatórios ativos
+    checklist = db.query(DocChecklist).filter(
+        DocChecklist.ativo == True,
+        DocChecklist.required.in_(["hard", "obrigatorio"])
+    ).all()
+
+    for item in checklist:
+        key = item.field_key
         if key not in docs_by_key:
-            issues.append(f"Documento obrigatorio ausente: {key}")
+            issues.append(f"Documento obrigatório ausente: {item.label}")
             can_run = False
         elif all(d.is_valid == False for d in docs_by_key[key]):
-            issues.append(f"Documento '{key}' invalido ou incompativel")
+            issues.append(f"Documento '{item.label}' inválido ou incompatível")
             can_run = False
 
     return {"can_run": can_run, "issues": issues, "warnings": []}
+
+
+
+from fastapi import Body as _Body
+
+MAX_FILE_SIZE_BYTES = 2_621_440  # 2.5 MB
+
+
+@router.post("/{analysis_id}/presigned-url")
+async def gerar_presigned_url(
+    analysis_id: str,
+    db: Session = Depends(get_db),
+    field_key: str = _Body(..., embed=True),
+    filename: str = _Body(..., embed=True),
+    content_type: str = _Body(default="application/octet-stream", embed=True),
+    file_size: int = _Body(..., embed=True),
+):
+    analysis = db.query(Analysis).filter(Analysis.id == analysis_id).first()
+    if not analysis:
+        raise HTTPException(404, "Analise nao encontrada")
+
+    if file_size > MAX_FILE_SIZE_BYTES:
+        raise HTTPException(
+            400,
+            f"Arquivo excede o limite de 2.5MB ({round(file_size/1024/1024, 2)}MB enviado). "
+            f"Reduza o tamanho do arquivo antes de enviar."
+        )
+
+    existing = db.query(Document).filter(
+        Document.analysis_id == analysis_id,
+        Document.field_key == field_key
+    ).count()
+    if existing >= MAX_FILES_PER_FIELD:
+        raise HTTPException(400, f"Limite de {MAX_FILES_PER_FIELD} arquivos por campo atingido")
+
+    try:
+        from services.s3_service import get_presigned_upload_url
+        result = get_presigned_upload_url(analysis_id, field_key, filename, content_type)
+        return {
+            "upload_url": result["upload_url"],
+            "s3_key": result["s3_key"],
+            "max_size_bytes": MAX_FILE_SIZE_BYTES,
+        }
+    except Exception as e:
+        raise HTTPException(500, f"Erro ao gerar URL de upload: {str(e)}")
+
+
+@router.post("/{analysis_id}/confirm-upload")
+async def confirmar_upload_s3(
+    analysis_id: str,
+    db: Session = Depends(get_db),
+    s3_key: str = _Body(..., embed=True),
+    field_key: str = _Body(..., embed=True),
+    field_label: str = _Body(..., embed=True),
+    original_name: str = _Body(..., embed=True),
+    is_required: bool = _Body(default=True, embed=True),
+):
+    analysis = db.query(Analysis).filter(Analysis.id == analysis_id).first()
+    if not analysis:
+        raise HTTPException(404, "Analise nao encontrada")
+
+    try:
+        from services.s3_service import download_file
+        file_bytes = download_file(s3_key)
+    except Exception as e:
+        raise HTTPException(500, f"Erro ao baixar arquivo do S3: {str(e)}")
+
+    if len(file_bytes) > MAX_FILE_SIZE_BYTES:
+        try:
+            from services.s3_service import delete_file
+            delete_file(s3_key)
+        except Exception:
+            pass
+        raise HTTPException(400, "Arquivo excede o limite de 2.5MB.")
+
+    mime_type = _get_mime_from_ext(original_name)
+
+    validation = validate_document_with_ai(
+        field_key=field_key,
+        file_bytes=file_bytes,
+        filename=original_name,
+        mime_type=mime_type,
+    )
+
+    doc = Document(
+        analysis_id=analysis_id,
+        field_key=field_key,
+        field_label=field_label,
+        original_name=original_name,
+        s3_key=s3_key,
+        file_size=len(file_bytes),
+        mime_type=mime_type,
+        is_valid=validation["is_valid"],
+        validation_msg=validation["message"],
+        read_pct=validation.get("read_pct"),
+        doc_type_found=validation.get("doc_type_found"),
+        is_required=is_required,
+    )
+    db.add(doc)
+    db.commit()
+    db.refresh(doc)
+
+    try:
+        from services.s3_service import get_presigned_url
+        file_url = get_presigned_url(s3_key)
+    except Exception:
+        file_url = None
+
+    return {
+        "document_id": doc.id,
+        "file_url": file_url,
+        "is_valid": validation["is_valid"],
+        "doc_type_found": validation.get("doc_type_found"),
+        "read_pct": validation.get("read_pct"),
+        "compatibility_pct": validation.get("compatibility_pct"),
+        "compatibility_level": validation.get("compatibility_level"),
+        "compatibility_msg": validation.get("compatibility_msg"),
+        "defasagem": validation.get("defasagem", {}),
+        "data_referencia": validation.get("data_referencia"),
+        "is_balancete": validation.get("is_balancete", False),
+        "has_dre_together": validation.get("has_dre_together", False),
+        "observacoes": validation.get("observacoes", ""),
+        "message": validation["message"],
+    }
+
+
+def _get_mime_from_ext(filename: str) -> str:
+    ext = filename.lower().rsplit(".", 1)[-1] if "." in filename else ""
+    mapping = {
+        "pdf": "application/pdf",
+        "jpg": "image/jpeg", "jpeg": "image/jpeg",
+        "png": "image/png",
+        "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "mp3": "audio/mpeg", "m4a": "audio/mp4", "wav": "audio/wav",
+        "mp4": "video/mp4", "mov": "video/quicktime",
+    }
+    return mapping.get(ext, "application/octet-stream")

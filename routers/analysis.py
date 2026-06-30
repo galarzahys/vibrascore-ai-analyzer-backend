@@ -160,7 +160,7 @@ async def listar_analyses(
             "status": a.status,
             "score": report.score_vibra if report else 0,
             "limite": report.limite_recomendado if report else 0,
-            "data": a.created_at.strftime("%d/%m/%Y") if a.created_at else "—",
+            "data": a.created_at.strftime("%d/%m/%Y %H:%M") if a.created_at else "—",
             "company_name": a.company_name,
         })
     return result

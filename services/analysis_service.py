@@ -357,14 +357,20 @@ Produza o relatorio em JSON valido com exatamente esta estrutura:
   "cadastral": {{
     "site": "",
     "funcionarios": "",
-    "endereco": "",
+    "endereco_completo": "",
+    "logradouro": "",
+    "municipio": "",
+    "uf": "",
+    "cep": "",
+    "telefone": "",
+    "email": "",
     "representantes": [
-      {{"nome": "", "cpf": "", "papel": ""}}
+        {{"nome": "", "cpf": "", "papel": ""}}
     ],
     "alteracoes": [
-      {{"data": "", "descricao": ""}}
+        {{"data": "", "descricao": ""}}
     ]
-  }},
+}},
   "qsa": [
     {{
       "nome": "",
@@ -449,7 +455,7 @@ INSTRUCOES CRITICAS — ANALISE MULTI-PERIODO:
   6. Tipo: Cumprimento de Sentenca e Execucao Fiscal entram antes de processos em fase inicial (Distribuido, Peticao)
   Para cada processo selecionado, preencha numero, tipo, vara_tribunal, assunto, polo (REU/AUTOR/OUTRO), status, valor e analise_critica (maximo 1 frase curta e objetiva explicando o risco)
 - Para grupo_economico: extraia empresas relacionadas ativas do bureau
-- Para cadastral: extraia site, funcionarios, representantes e alteracoes do bureau ou contrato social
+- Para cadastral: extraia o endereco do bureau ou contrato social e SEPARE em campos individuais: logradouro (rua/numero/bairro), municipio, uf (sigla 2 letras), cep (formato 00000-000). Mantenha tambem endereco_completo com o texto integral original. Extraia telefone e email se disponiveis no documento.
 - Para historico_interno: se houver dados preenchidos pelo analista, gere analise_ia avaliando o comportamento historico
 - Para qsa: inclua dados de PEP, sancoes e perfil do bureau se disponivel
 - Para curva_abc: se houver documento de Curva ABC, extraia cada cliente com participacao percentual

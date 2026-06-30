@@ -102,3 +102,25 @@ def _get_content_type(ext: str) -> str:
         "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     }
     return mapping.get(ext, "application/octet-stream")
+
+
+def get_presigned_upload_url(analysis_id: str, field_key: str, filename: str, content_type: str, expires: int = 600) -> dict:
+    """
+    Gera URL pré-assinada para upload direto do navegador ao S3.
+    Retorna dict com upload_url e s3_key.
+    """
+    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else "bin"
+    s3_key = f"analyses/{analysis_id}/{field_key}/{uuid.uuid4()}.{ext}"
+
+    upload_url = s3_client.generate_presigned_url(
+        "put_object",
+        Params={
+            "Bucket": BUCKET_NAME,
+            "Key": s3_key,
+            "ContentType": content_type or _get_content_type(ext),
+            "ServerSideEncryption": "AES256",
+        },
+        ExpiresIn=expires,
+    )
+
+    return {"upload_url": upload_url, "s3_key": s3_key}

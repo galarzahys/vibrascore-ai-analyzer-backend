@@ -280,7 +280,7 @@ Responda APENAS em JSON valido:
                 raw = raw[4:]
         result = json.loads(raw.strip())
 
-        is_valid = result.get("matches_field", False)
+        is_valid = result.get("matches_field", False) and compat_pct >= 60
         doc_type = result.get("doc_type_found", "Desconhecido")
         compat_pct = result.get("compatibility_pct", 0)
         quality = result.get("read_quality_pct", read_pct)
@@ -294,7 +294,7 @@ Responda APENAS em JSON valido:
         defasagem = calcular_defasagem(data_ref, field_key)
 
         # Nivel de compatibilidade
-        if is_valid and compat_pct >= 70:
+        if is_valid and compat_pct >= 60:
             compat_level = "ok"
             extras = []
             if is_balancete:
