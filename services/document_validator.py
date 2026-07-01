@@ -1,6 +1,8 @@
 """
 Vibra Score — Servico de validacao de documentos via Claude API
 Rodada 1: separacao leitura x compatibilidade + deteccao de defasagem
+
+load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), "..", ".env"))
 """
 
 import anthropic
@@ -12,7 +14,8 @@ from datetime import datetime, date
 from dotenv import load_dotenv
 
 # Carrega .env do diretório do backend antes de qualquer leitura de variável
-load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), "..", ".env"))
+
+load_dotenv(dotenv_path=os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".env"))
 
 def _get_client() -> anthropic.Anthropic:
     """Instancia o client Anthropic apenas quando necessário, após o .env ser carregado."""

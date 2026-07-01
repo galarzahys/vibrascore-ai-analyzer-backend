@@ -1,6 +1,8 @@
 """
 Vibra Score — Servico de analise de credito via Claude API
 Suporte a múltiplos arquivos por campo (até 5)
+
+load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), "..", ".env"))
 """
 
 import anthropic
@@ -11,7 +13,7 @@ import pdfplumber
 import io
 from dotenv import load_dotenv
 
-load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), "..", ".env"))
+load_dotenv(dotenv_path=os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".env"))
 
 
 def _get_client() -> anthropic.Anthropic:
