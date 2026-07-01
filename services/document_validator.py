@@ -284,7 +284,7 @@ Responda APENAS em JSON valido:
                 raw = raw[4:]
         result = json.loads(raw.strip())
 
-        is_valid = result.get("matches_field", False)
+        matches_field = result.get("matches_field", False)
         doc_type = result.get("doc_type_found", "Desconhecido")
         compat_pct = result.get("compatibility_pct", 0)
         quality = result.get("read_quality_pct", read_pct)
