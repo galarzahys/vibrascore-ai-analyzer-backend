@@ -20,6 +20,7 @@ load_dotenv(dotenv_path=os.path.join(os.path.dirname(os.path.abspath(__file__)),
 def _get_client() -> anthropic.Anthropic:
     """Instancia o client Anthropic apenas quando necessário, após o .env ser carregado."""
     api_key = os.getenv("ANTHROPIC_API_KEY")
+        print(f"[VALIDATOR] API_KEY presente: {bool(api_key)}, primeiros chars: {api_key[:10] if api_key else 'NENHUMA'}", flush=True)
     if not api_key:
         raise ValueError(
             "ANTHROPIC_API_KEY não encontrada. "
