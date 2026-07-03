@@ -447,6 +447,19 @@ INSTRUCOES CRITICAS — ANALISE MULTI-PERIODO:
 - FATURAMENTO_MENSAL: Mantenha tambem o array "faturamento_mensal" com TODOS os meses de TODOS os periodos concatenados em ordem cronologica (para compatibilidade).
 - FINANCEIRO_CALCULADO: Use os dados do periodo mais recente disponivel. Inclua memoria_calculo e interpretacao comparando a evolucao entre os periodos identificados.
 - INDICADORES: Use os valores do periodo mais recente.
+- FORMULAS OBRIGATORIAS DOS INDICADORES FINANCEIROS (use exatamente estas formulas, nao aproxime nem substitua por equivalentes):
+  - Liquidez Corrente = Ativo Circulante / Passivo Circulante
+  - Liquidez Seca = (Ativo Circulante - Estoques) / Passivo Circulante
+  - Liquidez Geral = (Passivo Circulante + Passivo Nao Circulante) / (Ativo Circulante + Ativo Realizavel a Longo Prazo)
+  - Endividamento/PL = (Passivo Circulante + Passivo Nao Circulante) / Patrimonio Liquido
+  - Margem Bruta = Lucro Bruto / Receita Liquida
+  - Margem Operacional = Resultado Operacional / Receita Liquida
+  - Margem Liquida = Lucro Liquido / Receita Liquida
+  - PMR (dias) = (Contas a Receber / Receita Bruta) x 360
+  - PMP (dias) = (Fornecedores / Custo das Mercadorias ou Servicos Vendidos) x 360
+  - Ciclo Financeiro = PMR - PMP (some PME se houver estoque relevante)
+  - NCG = Ativo Circulante Operacional - Passivo Circulante Operacional
+- MEMORIA DE CALCULO OBRIGATORIA: em "financeiro_calculado.memoria_calculo" detalhe, para CADA indicador acima que tenha sido calculado (incluindo os tres indicadores de liquidez), uma linha no formato "Nome do Indicador = formula com valores em R$ extraidos = resultado". Exemplo: "Liquidez Geral = (Passivo Circulante R$ 1.200.000 + Passivo Nao Circulante R$ 800.000) / (Ativo Circulante R$ 2.500.000 + Realizavel LP R$ 300.000) = 0,71". Nao omita nenhum indicador calculado. Se um indicador nao puder ser calculado por falta de dado no balanco/DRE, informe explicitamente qual dado esta faltando naquela linha, em vez de omitir o indicador.
 - Para tributario: extraia PEFIN, REFIN, Protestos, Cheques sem fundo, Dívida Ativa e Parcelamentos do bureau. Em "pefin_refin" coloque um resumo textual (ex: "PEFIN: R$ 6,0MM (5 ocorr.) | REFIN: R$ 7,5MM (3 ocorr.) | Protestos: R$ 52,5MM (41 ocorr.)"). Se não houver, escreva "Nada consta". Preencha os valores numéricos nos campos individuais.
 - Para processos: leia TODOS os processos da secao "Processos" do bureau. Selecione ate 6 processos criticos para incluir na lista, priorizando nesta ordem:
   1. Polo: empresa como REU tem prioridade sobre AUTOR
@@ -532,6 +545,30 @@ INSTRUCOES CRITICAS — ANALISE MULTI-PERIODO:
             else:
                 raise ValueError("JSON invalido mesmo apos tentativas de recuperacao")
 
+        # ===== CORRECAO ESCALA MARGENS (rentabilidade em percentual) INICIO =====
+        # A IA as vezes devolve margens como numero percentual inteiro
+        # (ex: 28.42 para representar 28,42%) em vez de fracao decimal (0.2842).
+        # O frontend multiplica por 100 na exibicao (fmtPctDec), entao sem esta
+        # correcao o valor exibido fica 100x maior (28,42% vira 2842%).
+        # Aqui dividimos por 100 os campos de rentabilidade em TODOS os blocos
+        # onde eles aparecem, garantindo que o valor salvo seja sempre a fracao
+        # decimal correta.
+        _CAMPOS_PCT_RENTABILIDADE = ["margem_bruta", "margem_operacional", "margem_liquida", "ebitda_margem"]
+
+        def _corrigir_escala_percentual(obj):
+            if not isinstance(obj, dict):
+                return
+            for campo in _CAMPOS_PCT_RENTABILIDADE:
+                val = obj.get(campo)
+                if isinstance(val, (int, float)):
+                    obj[campo] = val / 100
+
+        _corrigir_escala_percentual(result.get("indicadores", {}))
+        _corrigir_escala_percentual(result.get("financeiro_calculado", {}))
+        for _periodo in (result.get("periodos_financeiros") or []):
+            _corrigir_escala_percentual(_periodo)
+        # ===== CORRECAO ESCALA MARGENS (rentabilidade em percentual) FIM =====
+
         from models.database import Report as R
         report = db.query(R).filter(R.analysis_id == analysis_id).first()
         if not report:
@@ -597,6 +634,95 @@ INSTRUCOES CRITICAS — ANALISE MULTI-PERIODO:
             print(f"[ANALYSIS {analysis_id[:8]}] Aviso ao recalcular score: {ex_score}", flush=True)
             classe = None
         # ===== ETAPA 5 FIM =====
+
+        # ===== ETAPA 7 INICIO — Hard cap de limite por classe =====
+        # Corrige distorcao onde a IA propunha limites arrojados para classes de risco elevado,
+        # tendenciando ao faturamento e ignorando restricoes recentes / score de bureau baixo.
+        # O cap e aplicado como % do faturamento MENSAL medio.
+        try:
+            CAP_LIMITE_PCT_FATURAMENTO_MENSAL = {
+                'A': 0.30,   # ate 30% do faturamento mensal medio
+                'B': 0.25,
+                'C': 0.15,
+                'D': 0.09,
+                'E': 0.04,
+                'F': 0.02,
+                'G': 0.01,
+                'H': 0.00,   # veto — sem limite operacional
+                'I': 0.00,
+                'J': 0.00,
+            }
+
+            # Descobre o faturamento mensal medio a partir do result
+            faturamento_mensal_medio = None
+            faturamento_periodos = result.get("faturamento_periodos") or []
+            if faturamento_periodos:
+                # Usa o periodo mais recente com media_mensal preenchida
+                for periodo in reversed(faturamento_periodos):
+                    mm = periodo.get("media_mensal")
+                    if mm and float(mm) > 0:
+                        faturamento_mensal_medio = float(mm)
+                        break
+            if not faturamento_mensal_medio:
+                # Fallback: usa lista simples "faturamento_mensal"
+                fm_list = result.get("faturamento_mensal") or []
+                valores = [float(m.get("valor") or 0) for m in fm_list if m.get("valor")]
+                if valores:
+                    faturamento_mensal_medio = sum(valores) / len(valores)
+
+            limite_ia_original = float(lim.get("recomendado") or 0)
+            memoria_original   = lim.get("memoria_calculo") or ""
+
+            if classe and faturamento_mensal_medio and faturamento_mensal_medio > 0:
+                pct_cap = CAP_LIMITE_PCT_FATURAMENTO_MENSAL.get(classe, 0.0)
+                cap = faturamento_mensal_medio * pct_cap
+
+                if pct_cap == 0.0:
+                    # Classes H, I, J -> veto
+                    lim["recomendado"] = 0
+                    lim["requer_excecao"] = True
+                    lim["memoria_calculo"] = (
+                        f"VETO por Classe {classe}: risco incompativel com operacao "
+                        f"de credito sem caucao real integral. "
+                        f"Proposta original da IA: R$ {limite_ia_original:,.0f} — nao aplicada. "
+                        f"Para aprovar excepcionalmente, exigir garantia real de 100% do valor. "
+                        f"[Memoria original: {memoria_original}]"
+                    )
+                    print(f"[ANALYSIS {analysis_id[:8]}] VETO Classe {classe} aplicado — "
+                          f"IA propos R$ {limite_ia_original:,.0f}, motor zerou.", flush=True)
+                elif limite_ia_original > cap:
+                    # Cap ativa: reduz o limite ao teto
+                    lim["recomendado"] = round(cap, -2)  # arredonda para centena
+                    lim["memoria_calculo"] = (
+                        f"Cap Classe {classe} aplicado: "
+                        f"faturamento mensal medio R$ {faturamento_mensal_medio:,.0f} "
+                        f"x {pct_cap*100:.1f}% = R$ {cap:,.0f} "
+                        f"(arredondado a R$ {lim['recomendado']:,.0f}). "
+                        f"Proposta original da IA: R$ {limite_ia_original:,.0f} — reduzida. "
+                        f"[Memoria original: {memoria_original}]"
+                    )
+                    if classe in ('E', 'F', 'G'):
+                        lim["requer_excecao"] = True
+                    print(f"[ANALYSIS {analysis_id[:8]}] Cap Classe {classe} aplicado — "
+                          f"IA propos R$ {limite_ia_original:,.0f}, motor limitou a "
+                          f"R$ {lim['recomendado']:,.0f} ({pct_cap*100:.1f}% do fat. mensal).",
+                          flush=True)
+                else:
+                    # Limite da IA ja esta dentro do cap: mantem
+                    print(f"[ANALYSIS {analysis_id[:8]}] Limite dentro do cap Classe {classe} "
+                          f"(R$ {limite_ia_original:,.0f} <= R$ {cap:,.0f}). Mantido.",
+                          flush=True)
+            else:
+                if not classe:
+                    print(f"[ANALYSIS {analysis_id[:8]}] Aviso: classe indefinida, cap nao aplicado.",
+                          flush=True)
+                if not faturamento_mensal_medio:
+                    print(f"[ANALYSIS {analysis_id[:8]}] Aviso: faturamento mensal medio nao disponivel, "
+                          f"cap nao aplicado.", flush=True)
+        except Exception as ex_cap:
+            print(f"[ANALYSIS {analysis_id[:8]}] Aviso ao aplicar cap de limite: {ex_cap}", flush=True)
+        
+            # ===== ETAPA 7 FIM =====
 
         report.score_bureau          = scores.get("bureau")
         report.score_vibra           = scores.get("vibra_composto")

@@ -122,11 +122,37 @@ async def criar_usuario(
     if caller and caller.perfil not in ("superadmin", "admin"):
         raise HTTPException(403, "Sem permissão para criar usuários")
 
-    # Admin de tenant solo puede crear usuarios para su propio tenant
+    # Admin de tenant: validaciones específicas
     if caller and caller.perfil == "admin":
         client_id = caller.client_id
         if perfil in ("superadmin",):
             raise HTTPException(403, "Não pode criar superadmin")
+
+        # ── REGRA 1: dominio do email deve ser igual ao do admin ──
+        caller_domain = caller.email.split("@")[-1].lower()
+        new_domain = email.strip().lower().split("@")[-1]
+        if new_domain != caller_domain:
+            raise HTTPException(400, f"O e-mail do usuário deve ter o mesmo domínio do administrador (@{caller_domain})")
+
+        # ── REGRA 2: limite de usuarios por tenant ──
+        # 1 admin + 2 gerentes + 2 analistas = 5 total
+        LIMITES_POR_PERFIL = {"admin": 1, "gerente": 2, "analista": 2}
+        LIMITE_TOTAL = 5
+
+        usuarios_tenant = db.query(Usuario).filter(
+            Usuario.client_id == client_id,
+            Usuario.ativo == True
+        ).all()
+
+        # verificar total
+        if len(usuarios_tenant) >= LIMITE_TOTAL:
+            raise HTTPException(400, f"Limite de {LIMITE_TOTAL} usuários por empresa atingido (1 admin + 2 gerentes + 2 analistas)")
+
+        # verificar limite por perfil
+        if perfil in LIMITES_POR_PERFIL:
+            count_perfil = sum(1 for u in usuarios_tenant if u.perfil == perfil)
+            if count_perfil >= LIMITES_POR_PERFIL[perfil]:
+                raise HTTPException(400, f"Limite de {LIMITES_POR_PERFIL[perfil]} usuário(s) com perfil '{perfil}' atingido")
 
     email = email.strip().lower()
     if db.query(Usuario).filter(Usuario.email == email).first():
