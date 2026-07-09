@@ -92,6 +92,7 @@ async def get_report(analysis_id: str, db: Session = Depends(get_db)):
         "raw": raw,
         "documentos": [
             {
+                "id": d.id,
                 "field_key": d.field_key,
                 "field_label": d.field_label,
                 "original_name": d.original_name,

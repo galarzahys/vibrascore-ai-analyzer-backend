@@ -75,6 +75,7 @@ async def upload_document(
         file_bytes=file_bytes,
         filename=file.filename,
         mime_type=mime_type,
+        is_required=is_required,
     )
 
     # Tentar S3 (opcional)
@@ -503,3 +504,29 @@ async def confirmar_upload_anexo(
         "document_id": doc.id,
         "file_url": file_url,
     }
+
+@router.get("/{analysis_id}/doc/{doc_id}/url")
+async def get_doc_url(analysis_id: str, doc_id: str, db: Session = Depends(get_db)):
+    """Gera URL presignada fresca para download de um documento."""
+    doc = db.query(Document).filter(
+        Document.id == doc_id,
+        Document.analysis_id == analysis_id
+    ).first()
+    if not doc:
+        raise HTTPException(404, "Documento não encontrado")
+
+    # tentar S3 primeiro
+    if doc.s3_key and not doc.s3_key.startswith("local:"):
+        try:
+            from services.s3_service import get_presigned_url
+            url = get_presigned_url(doc.s3_key, expires=300)  # 5 minutos
+            return {"url": url, "filename": doc.original_name}
+        except Exception:
+            pass
+
+    # fallback local
+    if doc.s3_key and doc.s3_key.startswith("local:"):
+        safe_name = doc.s3_key[6:]
+        return {"url": f"/api/documents/{analysis_id}/file/{safe_name}", "filename": doc.original_name}
+
+    raise HTTPException(404, "Arquivo não disponível")

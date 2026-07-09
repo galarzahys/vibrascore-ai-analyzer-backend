@@ -187,6 +187,7 @@ def validate_document_with_ai(
     file_bytes: bytes,
     filename: str,
     mime_type: str,
+    is_required: bool = True,
 ) -> dict:
     """
     Valida o documento via Claude.
@@ -294,13 +295,14 @@ Responda APENAS em JSON valido:
         data_ref = result.get("data_referencia", "nao_identificada")
         observacoes = result.get("observacoes", "")
 
+        umbral = 70 if is_required else 50
         # is_valid agora exige compatibilidade mínima de 50%
-        is_valid = matches_field and compat_pct >= 50
+        is_valid = matches_field and compat_pct >= umbral
         # Calcular defasagem
         defasagem = calcular_defasagem(data_ref, field_key)
 
         # Nivel de compatibilidade
-        if is_valid and compat_pct >= 70:
+        if is_valid and compat_pct >= 85:
             compat_level = "ok"
             extras = []
             if is_balancete:
@@ -309,7 +311,7 @@ Responda APENAS em JSON valido:
                 extras.append("DRE incluido no mesmo arquivo")
             extra_str = " · " + " · ".join(extras) if extras else ""
             compat_msg = f"Compativel com o campo ({compat_pct}%){extra_str}"
-        elif is_valid and compat_pct >= 50:
+        elif is_valid and compat_pct >= umbral:
             compat_level = "warn"
             compat_msg = f"Compatibilidade parcial ({compat_pct}%) — {msg}"
         else:
