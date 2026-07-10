@@ -281,7 +281,7 @@ async def check_ready(analysis_id: str, db: Session = Depends(get_db)):
         if key not in docs_by_key:
             issues.append(f"Documento obrigatório ausente: {item.label}")
             can_run = False
-        elif all(d.is_valid == False for d in docs_by_key[key]):
+        elif all(not d.is_valid for d in docs_by_key[key]):
             issues.append(f"Documento '{item.label}' inválido ou incompatível")
             can_run = False
 

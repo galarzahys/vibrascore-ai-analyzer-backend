@@ -339,8 +339,9 @@ Responda APENAS em JSON valido:
         keywords = field_def.get("keywords", [])
         text_lower = extracted_text.lower()
         hits = sum(1 for kw in keywords if kw.lower() in text_lower)
-        passes = hits >= 2 or len(keywords) == 0
         compat_pct = min(100, hits * 20) if keywords else 50
+        umbral = 70 if is_required else 50
+        passes = compat_pct >= umbral
 
         return {
             "is_valid": passes,
