@@ -1,13 +1,14 @@
 """
 Router — Integrations (consulta API externa Vibra Full / SCR)
+Suporta client_id NULL para equipe interna (path param: "interno")
 """
 import json
 import os
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Body
+from fastapi import APIRouter, Depends, HTTPException, Body, Query
 from sqlalchemy.orm import Session
+from sqlalchemy import text
 from models.database import get_db, Analysis, Document
-import uuid
 
 router = APIRouter()
 
@@ -21,14 +22,25 @@ TIPO_CONSULTA = {
 }
 
 
-def _get_credenciais(db: Session, client_id: str) -> dict:
-    from sqlalchemy import text
-    row = db.execute(
-        text("SELECT api_key, api_secret, sandbox FROM api_integrations WHERE client_id = :cid AND ativo = 1"),
-        {"cid": client_id}
-    ).fetchone()
+def _resolve_client_id(client_id: str):
+    """'interno' representa a equipe interna (client_id NULL no banco)."""
+    return None if client_id == "interno" else client_id
+
+
+def _get_credenciais(db: Session, client_id) -> dict:
+    """Busca credenciais pelo client_id (pode ser None para equipe interna)."""
+    if client_id is None:
+        row = db.execute(
+            text("SELECT api_key, api_secret, sandbox FROM api_integrations WHERE client_id IS NULL AND ativo = 1")
+        ).fetchone()
+    else:
+        row = db.execute(
+            text("SELECT api_key, api_secret, sandbox FROM api_integrations WHERE client_id = :cid AND ativo = 1"),
+            {"cid": client_id}
+        ).fetchone()
+
     if not row or not row[0] or not row[1]:
-        raise HTTPException(400, "Credenciais de integração não configuradas para esta empresa. Configure em Configurações > Integração.")
+        raise HTTPException(400, "Credenciais de integração não configuradas. Configure em Configurações > Integração.")
     return {"api_key": row[0], "api_secret": row[1], "sandbox": bool(row[2])}
 
 
@@ -53,10 +65,7 @@ async def iniciar_consulta(
     if field_key not in TIPO_CONSULTA:
         raise HTTPException(400, f"field_key inválido. Use: {list(TIPO_CONSULTA.keys())}")
 
-    # buscar credenciais do tenant
-    if not analysis.client_id:
-        raise HTTPException(400, "Análise sem empresa associada. Não é possível usar integração.")
-
+    # client_id pode ser None para equipe interna
     creds = _get_credenciais(db, analysis.client_id)
 
     tipo = TIPO_CONSULTA[field_key]
@@ -77,7 +86,7 @@ async def iniciar_consulta(
         raise HTTPException(503, f"Erro de conexão com API externa: {str(e)}")
 
     if r.status_code == 401:
-        raise HTTPException(401, "Credenciais inválidas ou expiradas. Verifique as configurações de integração.")
+        raise HTTPException(401, "Credenciais inválidas ou expiradas.")
     if r.status_code == 404:
         raise HTTPException(404, "CNPJ não encontrado nas fontes de dados.")
     if r.status_code not in (200, 201):
@@ -92,7 +101,6 @@ async def iniciar_consulta(
     if not request_id:
         raise HTTPException(500, "API externa não retornou id_Consulta")
 
-    # salvar o id na análise para controle
     if field_key == "bureau":
         analysis.integration_bureau_id = request_id
     else:
@@ -113,7 +121,7 @@ async def iniciar_consulta(
 async def verificar_status(
     analysis_id: str,
     request_id: str,
-    field_key: str,
+    field_key: str = Query(...),
     db: Session = Depends(get_db),
 ):
     analysis = db.query(Analysis).filter(Analysis.id == analysis_id).first()
@@ -141,41 +149,46 @@ async def verificar_status(
     data = r.json()
     status = (data.get("consulta", {}).get("status") or data.get("status") or "").lower()
 
-    # status que indicam conclusão
-    # detectar conclusión por presença dos dados, não apenas pelo status
+    # detectar conclusão por presença dos dados ou status conhecido
     tem_dados = bool(data.get("bureau_1") or data.get("scr") or data.get("situacao_cadastral"))
-    concluido = tem_dados or status in ("concluido", "concluída", "completed", "done", "finalizado", "-", "")
+    concluido = tem_dados or status in ("concluido", "concluída", "concluída", "completed", "done", "finalizado", "-", "")
 
     if not concluido:
         return {"concluido": False, "status": status}
 
-    # consulta concluída — converter JSON para texto e criar Document
+    # consulta concluída — salvar JSON e criar Document
     texto = json.dumps(data, ensure_ascii=False, indent=2)
-
-    # verificar se já existe documento desta integração para este campo
-    doc_existente = db.query(Document).filter(
-        Document.analysis_id == analysis_id,
-        Document.field_key == field_key,
-        Document.s3_key.like("integration:%"),
-    ).first()
 
     field_labels = {
         "bureau": "Bureau de Crédito (Vibra Full) — via API",
         "scr": "SCR / BACEN — via API",
     }
 
+    doc_existente = db.query(Document).filter(
+        Document.analysis_id == analysis_id,
+        Document.field_key == field_key,
+        Document.s3_key.like("integration:%"),
+    ).first()
+
     if doc_existente:
-        doc_existente.validation_msg = "Obtido via API de integração"
         doc_existente.is_valid = True
+        doc_existente.validation_msg = "Obtido via API de integração"
         db.commit()
         doc = doc_existente
     else:
+        upload_dir = os.path.join(os.path.dirname(__file__), "..", "uploads", analysis_id)
+        os.makedirs(upload_dir, exist_ok=True)
+        json_filename = f"{field_key}_api_{request_id}.json"
+        json_path = os.path.join(upload_dir, json_filename)
+        with open(json_path, "w", encoding="utf-8") as f:
+            f.write(texto)
+
         doc = Document(
             analysis_id=analysis_id,
             field_key=field_key,
             field_label=field_labels.get(field_key, field_key),
-            original_name=f"{field_key}_api_{request_id}.json",
-            s3_key=f"integration:{request_id}:{field_key}",
+            original_name=json_filename,
+            s3_key=f"local:{json_filename}",
             file_size=len(texto.encode()),
             mime_type="application/json",
             is_valid=True,
@@ -187,16 +200,6 @@ async def verificar_status(
         db.add(doc)
         db.commit()
         db.refresh(doc)
-
-        # salvar o JSON em arquivo local para o motor de análise poder ler
-        upload_dir = os.path.join(os.path.dirname(__file__), "..", "uploads", analysis_id)
-        os.makedirs(upload_dir, exist_ok=True)
-        json_path = os.path.join(upload_dir, f"{field_key}_api_{request_id}.json")
-        with open(json_path, "w", encoding="utf-8") as f:
-            f.write(texto)
-        # atualizar s3_key para local
-        doc.s3_key = f"local:{field_key}_api_{request_id}.json"
-        db.commit()
 
     return {
         "concluido": True,
@@ -210,17 +213,23 @@ async def verificar_status(
 
 @router.get("/credenciais/{client_id}")
 async def get_credenciais(client_id: str, db: Session = Depends(get_db)):
-    from sqlalchemy import text
-    row = db.execute(
-        text("SELECT api_key, api_secret, sandbox, ativo FROM api_integrations WHERE client_id = :cid"),
-        {"cid": client_id}
-    ).fetchone()
+    resolved = _resolve_client_id(client_id)
+    if resolved is None:
+        row = db.execute(
+            text("SELECT api_key, api_secret, sandbox, ativo FROM api_integrations WHERE client_id IS NULL")
+        ).fetchone()
+    else:
+        row = db.execute(
+            text("SELECT api_key, api_secret, sandbox, ativo FROM api_integrations WHERE client_id = :cid"),
+            {"cid": resolved}
+        ).fetchone()
+
     if not row:
-        return {"configurado": False, "sandbox": True, "ativo": False}
+        return {"configurado": False, "sandbox": True, "ativo": False, "api_key": ""}
     return {
         "configurado": bool(row[0]),
         "api_key": row[0] or "",
-        "api_secret": "••••••••" if row[1] else "",  # nunca expor o secret
+        "api_secret": "••••••••" if row[1] else "",
         "sandbox": bool(row[2]),
         "ativo": bool(row[3]),
     }
@@ -231,24 +240,42 @@ async def salvar_credenciais(
     client_id: str,
     db: Session = Depends(get_db),
     api_key: str = Body(..., embed=True),
-    api_secret: str = Body(..., embed=True),
+    api_secret: str = Body(default=None, embed=True),
     sandbox: bool = Body(default=False, embed=True),
 ):
-    from sqlalchemy import text
-    existing = db.execute(
-        text("SELECT id FROM api_integrations WHERE client_id = :cid"),
-        {"cid": client_id}
-    ).fetchone()
+    resolved = _resolve_client_id(client_id)
+
+    # verificar se já existe
+    if resolved is None:
+        existing = db.execute(
+            text("SELECT id, api_secret FROM api_integrations WHERE client_id IS NULL")
+        ).fetchone()
+    else:
+        existing = db.execute(
+            text("SELECT id, api_secret FROM api_integrations WHERE client_id = :cid"),
+            {"cid": resolved}
+        ).fetchone()
+
+    # se não passou api_secret novo, manter o existente
+    secret_to_save = api_secret if api_secret else (existing[1] if existing else None)
+    if not secret_to_save:
+        raise HTTPException(400, "API Secret é obrigatório na primeira configuração.")
 
     if existing:
-        db.execute(
-            text("UPDATE api_integrations SET api_key=:k, api_secret=:s, sandbox=:sb, ativo=1, updated_at=datetime('now') WHERE client_id=:cid"),
-            {"k": api_key, "s": api_secret, "sb": int(sandbox), "cid": client_id}
-        )
+        if resolved is None:
+            db.execute(
+                text("UPDATE api_integrations SET api_key=:k, api_secret=:s, sandbox=:sb, ativo=1, updated_at=datetime('now') WHERE client_id IS NULL"),
+                {"k": api_key, "s": secret_to_save, "sb": int(sandbox)}
+            )
+        else:
+            db.execute(
+                text("UPDATE api_integrations SET api_key=:k, api_secret=:s, sandbox=:sb, ativo=1, updated_at=datetime('now') WHERE client_id=:cid"),
+                {"k": api_key, "s": secret_to_save, "sb": int(sandbox), "cid": resolved}
+            )
     else:
         db.execute(
             text("INSERT INTO api_integrations (client_id, api_key, api_secret, sandbox, ativo) VALUES (:cid, :k, :s, :sb, 1)"),
-            {"cid": client_id, "k": api_key, "s": api_secret, "sb": int(sandbox)}
+            {"cid": resolved, "k": api_key, "s": secret_to_save, "sb": int(sandbox)}
         )
     db.commit()
     return {"ok": True, "sandbox": sandbox}
