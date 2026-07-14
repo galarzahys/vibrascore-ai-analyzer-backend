@@ -24,6 +24,15 @@ def _get_client() -> anthropic.Anthropic:
 
 
 def extract_text_from_bytes(file_bytes: bytes) -> str:
+    # si es JSON, devolver directamente como texto
+    try:
+        text = file_bytes.decode("utf-8")
+        if text.strip().startswith("{") or text.strip().startswith("["):
+            return text
+    except Exception:
+        pass
+
+    # PDF normal
     try:
         with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
             texts = []
@@ -37,9 +46,10 @@ def extract_text_from_bytes(file_bytes: bytes) -> str:
 
 
 def _truncate_smart(text: str, field_key: str) -> str:
-    """Bureau sem truncamento. Demais documentos: até 12.000 chars."""
+    """Bureau sem truncamento. JSON de integração sem truncamento. Demais: até 12.000 chars."""
     is_bureau = any(kw in field_key.lower() for kw in ("bureau", "vibra", "consulta", "score"))
-    if is_bureau:
+    is_json_integration = text.strip().startswith("{") and len(text) > 1000
+    if is_bureau or is_json_integration:
         return text
     return text[:12000]
 
