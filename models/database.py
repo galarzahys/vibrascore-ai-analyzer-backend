@@ -51,6 +51,8 @@ class Analysis(Base):
     vibra_id  = Column(String, nullable=True)   # ex: 2606-01 (AAMM-seq)
     vibra_ver = Column(Integer, default=1)       # versão da análise (incrementa ao reabrir)
     client_id = Column(String, nullable=True)    # tenant (cliente Vibra)
+    integration_bureau_id = Column(String, nullable=True)  # id_Consulta retornado pela API
+    integration_scr_id    = Column(String, nullable=True)  # id_Consulta retornado pela API
 
     # Rodada P — vínculo opcional com Grupo Econômico
     # NULL = análise singular (comportamento 100% retrocompatível)
