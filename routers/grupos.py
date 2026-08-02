@@ -579,7 +579,6 @@ def _orquestrar_run_all(grupo_id: str):
     - Empresas sem documentos viram 'error' direto, sem chamar a IA com lista vazia.
     """
     tag = f"[GRUPO {grupo_id[:8]}]"
-    print(f"\n{tag} === Iniciando orquestração ===", flush=True)
 
     # Sessão raiz só para descobrir a lista de empresas e diretrizes
     db_root = SessionLocal()
@@ -599,7 +598,6 @@ def _orquestrar_run_all(grupo_id: str):
         db_root.close()
 
     total = len(empresas_ids)
-    print(f"{tag} empresas a processar: {total}", flush=True)
 
     MAX_TENTATIVAS = 3
     DELAY_ENTRE_EMPRESAS = 8  # segundos
@@ -615,15 +613,12 @@ def _orquestrar_run_all(grupo_id: str):
     )
 
     for idx, analysis_id in enumerate(empresas_ids, start=1):
-        print(f"\n{tag} --- empresa {idx}/{total} (id={analysis_id[:8]}) ---", flush=True)
-
         # Sessão própria para cada empresa
         db = SessionLocal()
         try:
             # 1) Materializa docs consolidados (idempotente)
             try:
                 qtd = _materializar_consolidados_para_filha(db, grupo_id, analysis_id)
-                print(f"{tag}   consolidados materializados/presentes: {qtd}", flush=True)
             except Exception as e:
                 print(f"{tag}   ERRO ao materializar consolidados: {type(e).__name__}: {e}", flush=True)
                 try:
@@ -635,7 +630,6 @@ def _orquestrar_run_all(grupo_id: str):
             documents = (
                 db.query(Document).filter(Document.analysis_id == analysis_id).all()
             )
-            print(f"{tag}   total de documents: {len(documents)}", flush=True)
 
             if not documents:
                 print(f"{tag}   empresa SEM documentos — marcando como 'error'", flush=True)

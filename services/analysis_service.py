@@ -155,6 +155,10 @@ def run_full_analysis(analysis_id: str, documents: list, db, diretrizes: str = "
                 else:
                     doc_texts[field_key] = field_texts[0]
 
+        print(f"[ANALYSIS {analysis_id[:8]}] doc_texts keys: {list(doc_texts.keys())}", flush=True)
+        for k, v in doc_texts.items():
+            print(f"[ANALYSIS {analysis_id[:8]}] {k}: {len(v)} chars", flush=True)
+
         if not doc_texts:
             doc_info = "\n".join([
                 f"- {d.field_label or d.field_key}: {d.original_name}"
@@ -166,6 +170,33 @@ def run_full_analysis(analysis_id: str, documents: list, db, diretrizes: str = "
         historico_interno = getattr(db_analysis, 'historico_interno', None) or ''
         if historico_interno:
             doc_texts['historico_interno'] = f"HISTORICO DE RELACIONAMENTO INTERNO:\n{historico_interno}"
+
+        db.refresh(db_analysis)
+
+            # Incluir faturamento manual se informado
+        faturamento_manual_json = getattr(db_analysis, 'faturamento_manual_json', None)
+
+        print(f"[ANALYSIS {analysis_id[:8]}] faturamento_manual_json={faturamento_manual_json}", flush=True)
+
+        if faturamento_manual_json:
+            try:
+                import json as _json
+                fat_data = _json.loads(faturamento_manual_json)
+                valor = fat_data.get('faturamento_medio_mensal', 0)
+                periodo = fat_data.get('periodo_meses', 12)
+                doc_texts['faturamento_manual'] = (
+                    f"FATURAMENTO INFORMADO MANUALMENTE PELO ANALISTA:\n"
+                    f"Faturamento médio mensal declarado: R$ {valor:,.2f}\n"
+                    f"Período de referência: últimos {periodo} meses\n"
+                    f"INSTRUCAO CRITICA: Use este valor como faturamento_medio_mensal. "
+                    f"Para preencher o array faturamento_mensal, crie {periodo} entradas mensais "
+                    f"retroativas a partir do mês atual, todas com valor={valor} e "
+                    f"fonte='declarado_analista'. Para faturamento_periodos, crie um periodo "
+                    f"com total_anual={valor * periodo:.2f}, media_mensal={valor:.2f} e "
+                    f"{periodo} meses no array meses. NAO deixe esses arrays vazios."
+                )
+            except Exception:
+                pass
 
         # ===== ETAPA 4 INICIO — Priorização de bureaus =====
         # Vibra Full ('bureau') é o primário se presente; senão, primeiro outro_bureau_* assume.
@@ -486,7 +517,8 @@ INSTRUCOES CRITICAS — ANALISE MULTI-PERIODO:
 - Para curva_abc: se houver documento de Curva ABC, extraia cada cliente com participacao percentual
 - Para endividamento_privado: - Para endividamento_privado: extraia EXCLUSIVAMENTE de documentos anexados separadamente que contenham dados de endividamento privado (ex: planilhas de dividas, extratos bancarios, relatorios de endividamento, documentos SCR/BACEN separados do bureau, declaracoes de dividas). NAO extraia do documento de bureau (Vibra Full ou qualquer outro bureau de credito) — os dados de PEFIN/REFIN/Protestos do bureau ja estao capturados no campo "tributario". Se nenhum documento separado de endividamento foi anexado, retorne array vazio []. Para cada credor identificado nos documentos separados, preencha: "credor" (nome da instituicao ou pessoa), "modalidade" (tipo de divida, ex: "CCB - Banco X", "Contrato de Mutuo", "Debito Bancario", "CRI", "CRA", "Debenture"), "valor" (valor em reais). 
 inclua no array "endividamento_privado" APENAS dividas constituidas com credores FORA do mercado financeiro regulado — Fundos de Investimento, FIDC, Securitizadora, empresas diversas (nao bancos) ou pessoas fisicas. NUNCA inclua bancos ou instituicoes financeiras como credor em endividamento_privado — dividas bancarias ja estao refletidas em endividamento_scr (SCR/BACEN), e soma-las novamente em endividamento_privado gera duplicidade. Desconsidere e nao some ao total qualquer credor que seja banco ou instituicao financeira, incluindo mas nao se limitando a: Itau, Bradesco, Banco do Brasil, Santander, Caixa Economica Federal (CEF), Safra, Mercantil do Brasil, C6 Bank, Sofisa, Banco ABC Brasil, BNDES, Finame e Pronampe. Se um credor listado nos documentos for banco ou instituicao financeira, exclua-o do array endividamento_privado e nao o some ao total dessa categoria.
-- Para endividamento_scr: liste no array "endividamento_scr" apenas as modalidades de credito com saldo devedor (ex: Capital de Giro, Desconto de Titulos, Financiamento, Conta Garantida, Cartao de Credito, entre outras). O item "Limite de Credito" (ou "Limite de Credito Total"/"Limite Total") do Detalhamento por Modalidade do SCR/BACEN NUNCA deve ser tratado como divida: nao inclua, nao liste e nao mencione esse item em endividamento_scr nem em nenhum outro ponto da analise (pontos_atencao, parecer, condicionantes). Limite de credito representa capacidade contratada disponivel, nao endividamento efetivo."""
+- Para endividamento_scr: liste no array "endividamento_scr" apenas as modalidades de credito com saldo devedor (ex: Capital de Giro, Desconto de Titulos, Financiamento, Conta Garantida, Cartao de Credito, entre outras). O item "Limite de Credito" (ou "Limite de Credito Total"/"Limite Total") do Detalhamento por Modalidade do SCR/BACEN NUNCA deve ser tratado como divida: nao inclua, nao liste e nao mencione esse item em endividamento_scr nem em nenhum outro ponto da analise (pontos_atencao, parecer, condicionantes). Limite de credito representa capacidade contratada disponivel, nao endividamento efetivo.
+- Para faturamento_manual: se existir a secao FATURAMENTO INFORMADO MANUALMENTE PELO ANALISTA nos documentos, use OBRIGATORIAMENTE esse valor como faturamento_medio_mensal e como base para calcular o limite de credito. Este valor foi confirmado pelo analista e tem prioridade sobre qualquer valor extraido de documentos."""
 
         client = _get_client()
         raw_parts = []
@@ -809,3 +841,54 @@ inclua no array "endividamento_privado" APENAS dividas constituidas com credores
         # ===== ETAPA 3 FIM =====
         db.commit()
         raise e
+
+
+async def _chamar_ia_com_contexto(
+    analysis_id: str,
+    texts_by_field: dict,
+    raw_v1: dict,
+) -> dict:
+    import os
+    import json
+    import anthropic
+
+    api_key = os.getenv("ANTHROPIC_API_KEY")
+    client = anthropic.Anthropic(api_key=api_key)
+
+    docs_text = "\n\n".join(
+        f"=== {fk.upper()} ===\n" + "\n".join(texts)
+        for fk, texts in texts_by_field.items()
+    )
+
+    contexto_v1 = ""
+    if raw_v1:
+        scores_v1 = raw_v1.get("scores", {})
+        limite_v1 = raw_v1.get("limite", {}).get("recomendado", 0) or 0
+        contexto_v1 = (
+            f"CONTEXTO DO ANALISE ANTERIOR (V1):\n"
+            f"- Score Vibra Composto anterior: {scores_v1.get('vibra_composto', 'N/A')}\n"
+            f"- Limite anterior: R$ {limite_v1:,.2f}\n"
+            f"Voce esta fazendo um RE-ANALISE. Baseie-se nos documentos fornecidos agora.\n"
+        )
+
+    prompt = (
+        f"Voce e um analista senior de credito.\n"
+        f"{contexto_v1}\n"
+        f"Analise os documentos abaixo e produza um relatorio completo de credito "
+        f"em JSON com a mesma estrutura do relatorio original.\n\n"
+        f"DOCUMENTOS DISPONIVEIS:\n{docs_text}\n\n"
+        f"Retorne APENAS o JSON valido, sem texto adicional."
+    )
+
+    response = client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=48000,
+        messages=[{"role": "user", "content": prompt}]
+    )
+
+    raw = response.content[0].text.strip()
+    if raw.startswith("```"):
+        raw = raw.split("```")[1]
+        if raw.startswith("json"):
+            raw = raw[4:]
+    return json.loads(raw.strip())

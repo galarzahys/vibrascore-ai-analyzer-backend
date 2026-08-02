@@ -127,24 +127,24 @@ async def get_vibra_id(analysis_id: str, db: Session = Depends(get_db)):
 async def listar_analyses(
     caller_email: str = "",
     db: Session = Depends(get_db),
+    ver_todos: bool = False,
 ):
-    """
-    Retorna lista resumida de análises para o menu.
-    - superadmin: ve todas
-    - otros: solo las de su client_id
-    """
     from models.database import Report, Usuario
 
-    # Determinar filtro por tenant
-    client_id_filter = None
+    caller = None
     if caller_email:
         caller = db.query(Usuario).filter(Usuario.email == caller_email).first()
-        if caller and caller.perfil != "superadmin":
-            client_id_filter = caller.client_id
 
-    q = db.query(Analysis)
-    if client_id_filter is not None:
-        q = q.filter(Analysis.client_id == client_id_filter)
+    q = db.query(Analysis).filter(
+        Analysis.grupo_id.is_(None)  # excluir análises de grupo
+    )
+
+    if caller and caller.perfil == 'superadmin':
+        if not ver_todos:
+            q = q.filter(Analysis.client_id.is_(None))
+        # ver_todos=True → não filtra, ve tudo
+    elif caller and caller.client_id:
+        q = q.filter(Analysis.client_id == caller.client_id)
 
     analyses = q.order_by(Analysis.created_at.desc()).all()
 
@@ -162,6 +162,8 @@ async def listar_analyses(
             "limite": report.limite_recomendado if report else 0,
             "data": a.created_at.isoformat() + "Z" if a.created_at else None,
             "company_name": a.company_name,
+            "version_num": a.version_num or 1,
+            "parent_analysis_id": a.parent_analysis_id,
         })
     return result
 

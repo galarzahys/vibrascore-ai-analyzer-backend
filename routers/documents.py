@@ -291,7 +291,7 @@ async def check_ready(analysis_id: str, db: Session = Depends(get_db)):
 
 from fastapi import Body as _Body
 
-MAX_FILE_SIZE_BYTES = 2_621_440  # 2.5 MB
+MAX_FILE_SIZE_BYTES = 5_242_880 # 5 MB
 
 
 @router.post("/{analysis_id}/presigned-url")
@@ -530,3 +530,74 @@ async def get_doc_url(analysis_id: str, doc_id: str, db: Session = Depends(get_d
         return {"url": f"/api/documents/{analysis_id}/file/{safe_name}", "filename": doc.original_name}
 
     raise HTTPException(404, "Arquivo não disponível")
+
+@router.post("/{analysis_id}/faturamento-manual")
+async def salvar_faturamento_manual(
+    analysis_id: str,
+    db: Session = Depends(get_db),
+    faturamento_medio_mensal: float = _Body(..., embed=True),
+    periodo_meses: int = _Body(default=12, embed=True),
+    informado_em: str = _Body(default="", embed=True),
+):
+    analysis = db.query(Analysis).filter(Analysis.id == analysis_id).first()
+    if not analysis:
+        raise HTTPException(404, "Análise não encontrada")
+
+    import json as _json
+    data = {
+        "faturamento_medio_mensal": faturamento_medio_mensal,
+        "periodo_meses": periodo_meses,
+        "informado_em": informado_em,
+    }
+    analysis.faturamento_manual_json = _json.dumps(data, ensure_ascii=False)
+
+    # criar Document virtual para o check-ready reconhecer como válido
+    doc_existente = db.query(Document).filter(
+        Document.analysis_id == analysis_id,
+        Document.field_key == "faturamento",
+        Document.s3_key == "manual:faturamento"
+    ).first()
+
+    fat_formatado = f"R$ {faturamento_medio_mensal:,.2f}/mês ({periodo_meses} meses)"
+    if not doc_existente:
+        from uuid import uuid4
+        doc = Document(
+            analysis_id=analysis_id,
+            field_key="faturamento",
+            field_label="Declaração de Faturamento (manual)",
+            original_name=f"Faturamento informado manualmente — {fat_formatado}",
+            s3_key="manual:faturamento",
+            file_size=0,
+            mime_type="text/plain",
+            is_valid=True,
+            validation_msg="Faturamento informado manualmente pelo analista",
+            read_pct=100.0,
+            doc_type_found="Faturamento Manual",
+            is_required=True,
+        )
+        doc.id = str(uuid4())
+        db.add(doc)
+    else:
+        doc_existente.original_name = f"Faturamento informado manualmente — {fat_formatado}"
+        doc_existente.is_valid = True
+
+    db.commit()
+    return {"ok": True, "faturamento_medio_mensal": faturamento_medio_mensal, "periodo_meses": periodo_meses}
+
+
+@router.delete("/{analysis_id}/faturamento-manual")
+async def deletar_faturamento_manual(analysis_id: str, db: Session = Depends(get_db)):
+    analysis = db.query(Analysis).filter(Analysis.id == analysis_id).first()
+    if not analysis:
+        raise HTTPException(404, "Análise não encontrada")
+
+    analysis.faturamento_manual_json = None
+
+    # remover Document virtual
+    db.query(Document).filter(
+        Document.analysis_id == analysis_id,
+        Document.s3_key == "manual:faturamento"
+    ).delete()
+
+    db.commit()
+    return {"ok": True}
