@@ -892,3 +892,5 @@ async def _chamar_ia_com_contexto(
         if raw.startswith("json"):
             raw = raw[4:]
     return json.loads(raw.strip())
+
+

@@ -601,3 +601,46 @@ async def deletar_faturamento_manual(analysis_id: str, db: Session = Depends(get
 
     db.commit()
     return {"ok": True}
+
+@router.post("/validate")
+async def validar_documento(
+    db: Session = Depends(get_db),
+    s3_key: str = _Body(..., embed=True),
+    field_key: str = _Body(..., embed=True),
+    original_name: str = _Body(..., embed=True),
+    is_required: bool = _Body(default=True, embed=True),
+):
+    """
+    Valida un documento via IA sin persistir nada.
+    Usado por el backend .NET para validar después de subir a S3.
+    """
+    try:
+        from services.s3_service import download_file
+        file_bytes = download_file(s3_key)
+    except Exception as e:
+        raise HTTPException(500, f"Erro ao baixar arquivo do S3: {str(e)}")
+
+    mime_type = _get_mime_from_ext(original_name)
+
+    validation = validate_document_with_ai(
+        field_key=field_key,
+        file_bytes=file_bytes,
+        filename=original_name,
+        mime_type=mime_type,
+        is_required=is_required,
+    )
+
+    return {
+        "is_valid":           validation["is_valid"],
+        "doc_type_found":     validation.get("doc_type_found"),
+        "read_pct":           validation.get("read_pct"),
+        "compatibility_pct":  validation.get("compatibility_pct"),
+        "compatibility_level": validation.get("compatibility_level"),
+        "compatibility_msg":  validation.get("compatibility_msg"),
+        "defasagem":          validation.get("defasagem", {}),
+        "data_referencia":    validation.get("data_referencia"),
+        "is_balancete":       validation.get("is_balancete", False),
+        "has_dre_together":   validation.get("has_dre_together", False),
+        "observacoes":        validation.get("observacoes", ""),
+        "message":            validation["message"],
+    }

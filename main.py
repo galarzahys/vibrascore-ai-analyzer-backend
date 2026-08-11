@@ -9,7 +9,7 @@ from fastapi.responses import FileResponse
 from contextlib import asynccontextmanager
 
 from models.database import init_db
-from routers import documents, analysis, reports, grupos, overrides, scoring, auth, admin, clients, integrations, reanalise
+from routers import documents, analysis, reports, grupos, overrides, scoring, auth, admin, clients, integrations, reanalise, ia_run
 
 
 @asynccontextmanager
@@ -39,6 +39,7 @@ app.include_router(admin.router,     prefix="/api/admin",     tags=["admin"])
 app.include_router(clients.router,   prefix="/api/clientes",  tags=["clientes"])
 app.include_router(integrations.router, prefix="/api/integrations", tags=["integrations"])
 app.include_router(reanalise.router, prefix="/api/reanalise", tags=["reanalise"])
+app.include_router(ia_run.router, prefix="/api/ia", tags=["ia-run"])
 
 app.mount("/static", StaticFiles(directory="../vibrascore-ai-analyzer-frontend"), name="static")
 
