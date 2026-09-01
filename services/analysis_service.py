@@ -554,7 +554,7 @@ inclua no array "endividamento_privado" APENAS dividas constituidas com credores
                 t_inicio = time.time()
                 raw_parts = []
                 with client.messages.stream(
-                    model="claude-sonnet-4-5",
+                    model="claude-sonnet-5",
                     max_tokens=48000,
                     messages=[{"role": "user", "content": prompt}],
                 ) as stream:
@@ -889,7 +889,7 @@ async def _chamar_ia_com_contexto(
     )
 
     response = client.messages.create(
-        model="claude-sonnet-4-6",
+        model="claude-sonnet-5",
         max_tokens=48000,
         messages=[{"role": "user", "content": prompt}]
     )

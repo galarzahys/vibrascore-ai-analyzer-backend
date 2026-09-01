@@ -273,7 +273,7 @@ Responda APENAS em JSON valido:
     try:
         client = _get_client()
         response = client.messages.create(
-            model="claude-haiku-4-5-20251001",
+            model="claude-sonnet-5",
             max_tokens=512,
             messages=[{"role": "user", "content": prompt}],
         )
